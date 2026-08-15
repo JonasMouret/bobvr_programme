@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build Windows (PyInstaller)
+# La recette est installer/bobvr.spec ; tout ce qu'elle produit est jetable.
+installer/build/
+installer/dist/
+*.manifest
+
+# Exécutables embarqués dans la build Windows.
+# ffmpeg.exe, ffprobe.exe, exiftool.exe et son dossier exiftool_files/ sont
+# déposés là à la main : plusieurs dizaines de Mo, et ce ne sont pas nos
+# sources. Le README du dossier explique quoi y mettre, donc il reste suivi.
+installer/vendor/*
+!installer/vendor/README.md
+
+# Vidéos. Un extrait de test posé dans l'arborescence part vite à 1 Go —
+# voir la section Tests du README pour en fabriquer un hors dépôt.
+*.360
+*.mp4
+*.LRV
+*.THM
+
+# Rendus interrompus : le pipeline écrit sur un nom .part avant de renommer.
+*.part
+
+# Réglages locaux de Claude Code (la config partagée de .claude/ reste suivie).
+.claude/settings.local.json
+
+# Éditeurs et systèmes de fichiers
+.vscode/
+.idea/
+*.swp
+.DS_Store

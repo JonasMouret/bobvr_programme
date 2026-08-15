@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bobvr"
+version = "0.1.0"
+description = "Automatise l'import et la conversion des vidéos GoPro MAX d'une piste de bobsleigh"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "PySide6>=6.6",
+    "pydantic>=2.6",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+build = ["pyinstaller>=6.6"]
+
+[project.gui-scripts]
+bobvr = "bobvr.ui.app:main"
+
+[project.scripts]
+bobvr-cli = "bobvr.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["bobvr*"]
+
+[tool.setuptools.package-data]
+"bobvr.render" = ["kernels/*.cl"]
+"bobvr.ui" = ["icon.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:bobvr.*"]
