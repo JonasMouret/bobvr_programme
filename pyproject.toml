@@ -34,7 +34,7 @@ include = ["bobvr*"]
 
 [tool.setuptools.package-data]
 "bobvr.render" = ["kernels/*.cl"]
-"bobvr.ui" = ["icon.png"]
+"bobvr.ui" = ["*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

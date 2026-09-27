@@ -30,10 +30,13 @@ ICON = PROJECT / "installer" / "bobvr.ico"
 datas = [
     (str(PROJECT / "bobvr" / "render" / "kernels" / "gopromax_equirect.cl"),
      "bobvr/render/kernels"),
-    # The window icon, read at run time. The .ico below is the icon of the
-    # .exe file itself, which is a different thing.
-    (str(PROJECT / "bobvr" / "ui" / "icon.png"), "bobvr/ui"),
 ]
+
+# UI images read at run time: the window icon, and the splash logo if the
+# builder dropped a bobvr/ui/splash.png in. The .ico below is the icon of the
+# .exe file itself, which is a different thing.
+for image in sorted((PROJECT / "bobvr" / "ui").glob("*.png")):
+    datas.append((str(image), "bobvr/ui"))
 
 # Helper executables, if the builder dropped any in. Declared as datas rather
 # than binaries: PyInstaller rewrites the load paths of things it considers

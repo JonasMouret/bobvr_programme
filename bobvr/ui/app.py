@@ -47,6 +47,64 @@ def database_path(settings: Settings) -> Path:
     return Path(user_data_dir(APP_NAME, appauthor=False)) / "clips.sqlite3"
 
 
+def _splash_logo() -> Path | None:
+    """The image for the startup screen: a dedicated splash, else the icon.
+
+    Drop a ``splash.png`` next to this file to show the full logo at launch;
+    without one, the window icon stands in.
+    """
+    here = Path(__file__).resolve().parent
+    for name in ("splash.png", "icon.png"):
+        candidate = here / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _show_splash() -> "QSplashScreen | None":
+    """A logo screen while the slow startup (hardware probe) runs.
+
+    Returns None if no image is available or Qt cannot load it, so a missing
+    asset costs the splash but never the launch.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPainter, QPixmap
+    from PySide6.QtWidgets import QSplashScreen
+
+    logo = _splash_logo()
+    if logo is None:
+        return None
+    source = QPixmap(str(logo))
+    if source.isNull():
+        return None
+
+    width, height = 360, 320
+    canvas = QPixmap(width, height)
+    canvas.fill(QColor("#ffffff"))          # the logo is drawn to read on white
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    scaled = source.scaled(232, 232, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    painter.drawPixmap((width - scaled.width()) // 2, 26, scaled)
+    painter.setPen(QColor("#d9dee3"))       # a hairline so the edge shows on white
+    painter.drawRect(0, 0, width - 1, height - 1)
+    painter.end()
+
+    splash = QSplashScreen(canvas)
+    splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    splash.show()
+    return splash
+
+
+def _splash_note(splash, text: str) -> None:
+    if splash is None:
+        return
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+
+    splash.showMessage(text, Qt.AlignBottom | Qt.AlignHCenter, QColor("#33475b"))
+    QApplication.processEvents()
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -57,18 +115,26 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(APP_NAME)
     _apply_icon(app)
 
+    splash = _show_splash()
+
     settings = Settings.load()
 
+    _splash_note(splash, "Détection du matériel…")
     try:
         caps = detect(settings.ffmpeg_path, settings.ffprobe_path)
     except FFmpegMissingError as exc:
+        if splash is not None:
+            splash.close()
         QMessageBox.critical(None, "ffmpeg introuvable", str(exc))
         return 2
 
+    _splash_note(splash, "Ouverture de la bibliothèque…")
     db = Database(database_path(settings))
     try:
         orchestrator = Orchestrator(settings, db, caps=caps)
     except RuntimeError as exc:
+        if splash is not None:
+            splash.close()
         QMessageBox.critical(None, "Démarrage impossible", str(exc))
         db.close()
         return 2
@@ -80,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(settings, db, orchestrator)
     orchestrator.start()
     window.show()
+    if splash is not None:
+        splash.finish(window)
 
     try:
         return app.exec()
