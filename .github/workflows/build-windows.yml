@@ -108,10 +108,15 @@ jobs:
           }
           # Le binaire Windows n'est plus servi par exiftool.org directement
           # (l'URL du site renvoie 404) : la page de téléchargement pointe vers
-          # SourceForge, qui héberge le zip. On y va donc en direct.
+          # SourceForge, qui héberge le zip. On y va donc en direct, avec
+          # curl.exe : SourceForge répond par une redirection vers un miroir, et
+          # Invoke-WebRequest tente de parser cette réponse en HTML (il charge
+          # WindowsBase puis échoue sur un runner sans IE). curl suit la
+          # redirection (-L) et écrit le binaire sans rien interpréter.
           $url = "https://downloads.sourceforge.net/project/exiftool/exiftool-${ver}_64.zip"
           Write-Host "Téléchargement d'exiftool $ver…"
-          Invoke-WebRequest -Uri $url -OutFile exiftool.zip -MaximumRedirection 5
+          curl.exe -L --fail --retry 3 -A "Mozilla/5.0" -o exiftool.zip $url
+          if ($LASTEXITCODE -ne 0) { throw "Téléchargement d'exiftool échoué (curl $LASTEXITCODE)." }
           Expand-Archive -Path exiftool.zip -DestinationPath exiftool-extract -Force
           # L'archive Windows livre « exiftool(-k).exe » ; BobVr attend « exiftool.exe ».
           $exe = Get-ChildItem -Path exiftool-extract -Recurse -Filter "exiftool*.exe" |
