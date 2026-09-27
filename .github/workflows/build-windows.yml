@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       exiftool_version:
-        description: "Version d'exiftool à embarquer (vide = version courante d'exiftool.org)"
+        description: "Version d'exiftool (vide = dernière du paquet Chocolatey)"
         required: false
         default: ""
 
@@ -23,10 +23,9 @@ permissions:
   contents: write        # nécessaire pour publier la release
 
 env:
-  # Vide par défaut : l'étape lit la version courante sur exiftool.org
-  # (https://exiftool.org/ver.txt). On ne fige pas de numéro, sinon il tombe
-  # en 404 dès qu'exiftool publie une nouvelle version et déplace l'ancienne.
-  # Le déclenchement manuel peut forcer une version précise.
+  # Vide par défaut : Chocolatey installe la dernière version disponible. Le
+  # déclenchement manuel peut forcer une version précise (format Chocolatey,
+  # ex. 13.59.0).
   EXIFTOOL_VERSION: ${{ github.event.inputs.exiftool_version }}
   # Build ffmpeg complète (OpenCL + NVENC). L'URL « latest » de BtbN est
   # stable ; c'est une des deux sources recommandées dans docs/windows.md.
@@ -93,42 +92,39 @@ jobs:
           Write-Host "ffmpeg : program_opencl et h264_nvenc présents."
 
       # exiftool est optionnel : sans lui, les MP4 sortent sans métadonnées 360
-      # et s'ouvrent à plat. On ne bloque donc pas la release si exiftool.org
-      # a un hoquet, mais on le signale bruyamment.
-      - name: Télécharger exiftool
+      # et s'ouvrent à plat. On ne bloque donc pas la release s'il manque, mais
+      # on le signale bruyamment.
+      #
+      # On passe par Chocolatey (préinstallé sur le runner) plutôt que par un
+      # téléchargement direct : le binaire officiel est sur SourceForge, qui
+      # renvoie 403 aux IP des datacenters (Azure/GitHub Actions). Le paquet
+      # Chocolatey, lui, embarque le zip dans le .nupkg — aucun accès réseau
+      # vers SourceForge à l'installation.
+      - name: Installer exiftool
         id: exiftool
         shell: pwsh
         continue-on-error: true
         run: |
           $ErrorActionPreference = "Stop"
-          $ver = "$env:EXIFTOOL_VERSION"
-          if (-not $ver) {
-            # ver.txt (sur exiftool.org) donne la version courante.
-            $ver = (Invoke-WebRequest -Uri "https://exiftool.org/ver.txt" -UseBasicParsing).Content.Trim()
-          }
-          # Le binaire Windows n'est plus servi par exiftool.org directement
-          # (l'URL du site renvoie 404) : la page de téléchargement pointe vers
-          # SourceForge, qui héberge le zip. On y va donc en direct, avec
-          # curl.exe : SourceForge répond par une redirection vers un miroir, et
-          # Invoke-WebRequest tente de parser cette réponse en HTML (il charge
-          # WindowsBase puis échoue sur un runner sans IE). curl suit la
-          # redirection (-L) et écrit le binaire sans rien interpréter.
-          $url = "https://downloads.sourceforge.net/project/exiftool/exiftool-${ver}_64.zip"
-          Write-Host "Téléchargement d'exiftool $ver…"
-          curl.exe -L --fail --retry 3 -A "Mozilla/5.0" -o exiftool.zip $url
-          if ($LASTEXITCODE -ne 0) { throw "Téléchargement d'exiftool échoué (curl $LASTEXITCODE)." }
-          Expand-Archive -Path exiftool.zip -DestinationPath exiftool-extract -Force
-          # L'archive Windows livre « exiftool(-k).exe » ; BobVr attend « exiftool.exe ».
-          $exe = Get-ChildItem -Path exiftool-extract -Recurse -Filter "exiftool*.exe" |
+          $chocoArgs = @("install", "exiftool", "-y", "--no-progress")
+          if ($env:EXIFTOOL_VERSION) { $chocoArgs += @("--version", $env:EXIFTOOL_VERSION) }
+          choco @chocoArgs
+          if ($LASTEXITCODE -ne 0) { throw "choco install exiftool a échoué." }
+
+          # Le vrai exécutable est sous lib\exiftool ; ce qui est dans \bin
+          # n'est qu'un shim Chocolatey, inutilisable une fois recopié ailleurs.
+          $root = Join-Path $env:ChocolateyInstall "lib\exiftool"
+          $exe = Get-ChildItem -Path $root -Recurse -Filter "exiftool.exe" -ErrorAction SilentlyContinue |
+                 Sort-Object { $_.FullName -match '64' } -Descending |
                  Select-Object -First 1
-          if (-not $exe) { throw "exiftool.exe introuvable dans l'archive." }
+          if (-not $exe) { throw "exiftool.exe introuvable après l'installation." }
           Copy-Item $exe.FullName installer\vendor\exiftool.exe -Force
-          $files = Get-ChildItem -Path exiftool-extract -Recurse -Directory -Filter "exiftool_files" |
+          # La distribution récente sépare l'exe de son dossier exiftool_files ;
+          # les versions plus anciennes sont un exe autonome (pas de dossier).
+          $files = Get-ChildItem -Path $exe.Directory -Recurse -Directory -Filter "exiftool_files" -ErrorAction SilentlyContinue |
                    Select-Object -First 1
-          if ($files) {
-            Copy-Item $files.FullName installer\vendor\exiftool_files -Recurse -Force
-          }
-          Write-Host "exiftool embarqué."
+          if ($files) { Copy-Item $files.FullName installer\vendor\exiftool_files -Recurse -Force }
+          Write-Host "exiftool embarqué ($($exe.FullName))."
 
       - name: Avertir si exiftool manque
         if: steps.exiftool.outcome == 'failure'
