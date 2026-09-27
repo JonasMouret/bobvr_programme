@@ -37,6 +37,12 @@ def _add_render_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cpu", action="store_true", help="forcer le rendu logiciel"
     )
+    parser.add_argument(
+        "--stabilise", type=float, default=0.0, metavar="SECONDES",
+        help="EXPÉRIMENTAL : stabiliser l'image, constante de lissage en "
+             "secondes (0.5 est un point de départ). La géométrie n'est pas "
+             "encore validée : le rendu bouge actuellement davantage.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,6 +199,7 @@ def command_render(args) -> int:
         ),
         cubic=config.cubic,
         initial_fov=args.fov if args.fov is not None else config.initial_fov,
+        stabilise_seconds=args.stabilise,
         quality=args.quality or config.quality,
         max_bitrate_kbps=config.max_bitrate_kbps,
         force_cpu=args.cpu or config.force_cpu,

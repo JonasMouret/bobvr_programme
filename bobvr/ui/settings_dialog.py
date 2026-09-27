@@ -329,6 +329,45 @@ class SettingsDialog(QDialog):
             view_form.addRow(no_gpu)
         form.addRow(view_box)
 
+        steady_box = QGroupBox("Stabilisation")
+        steady_form = QFormLayout(steady_box)
+        self.stabilise_check = _check(
+            "Stabiliser l'image à partir du gyroscope",
+            config.stabilise,
+        )
+        steady_form.addRow(self.stabilise_check)
+        self.stabilise_spin = QDoubleSpinBox()
+        self.stabilise_spin.setRange(0.1, 5.0)
+        self.stabilise_spin.setSingleStep(0.1)
+        self.stabilise_spin.setDecimals(1)
+        self.stabilise_spin.setSuffix(" s")
+        self.stabilise_spin.setValue(config.stabilise_seconds)
+        steady_form.addRow("Force du lissage", self.stabilise_spin)
+        steady_hint = QLabel(
+            "L'orientation est reconstruite à partir du gyroscope, à 802 Hz, "
+            "et lissée <b>sans retard</b> — ce qu'une stabilisation embarquée "
+            "ne sait pas faire. Plus la valeur est élevée, plus l'image est "
+            "calme ; en 360 cela ne coûte aucun recadrage, la sphère est "
+            "tournée et tous les pixels existent déjà.<br>"
+            "Appliqué <b>au rendu</b> : les clips déjà convertis sont à refaire."
+        )
+        steady_hint.setWordWrap(True)
+        steady_form.addRow(steady_hint)
+        self.stabilise_check.toggled.connect(self.stabilise_spin.setEnabled)
+        self.stabilise_spin.setEnabled(self.stabilise_check.isChecked())
+
+        if not self._caps.has_opencl_kernel:
+            self.stabilise_check.setChecked(False)
+            self.stabilise_check.setEnabled(False)
+            self.stabilise_spin.setEnabled(False)
+            no_gpu_steady = QLabel(
+                "Indisponible sans kernel OpenCL : le repli logiciel ne sait "
+                "appliquer qu'une orientation fixe, pas une par image."
+            )
+            no_gpu_steady.setWordWrap(True)
+            steady_form.addRow(no_gpu_steady)
+        form.addRow(steady_box)
+
         self.force_cpu_check = _check(
             "Forcer le rendu sur le processeur (diagnostic uniquement)",
             config.force_cpu,
@@ -437,6 +476,8 @@ class SettingsDialog(QDialog):
                 roll=self.roll_spin.value(),
                 force_cpu=self.force_cpu_check.isChecked(),
                 initial_fov=self.fov_spin.value(),
+                stabilise=self.stabilise_check.isChecked(),
+                stabilise_seconds=self.stabilise_spin.value(),
             )
             updated = Settings(
                 library_root=Path(self.library_edit.text()).expanduser(),

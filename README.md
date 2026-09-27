@@ -235,6 +235,43 @@ Mesuré contre `CORI` sur une descente réelle, ce que le fichier déclare —
 c'est `diag(+1, −1, +1)` qui le fait, et `CORI` compose de façon extrinsèque.
 Les appliquer d'office reviendrait à ajouter une étape à défaire ensuite.
 
+## Stabilisation
+
+Réglage **Rendu → Stabilisation**, une case à cocher et la force du lissage
+(0,5 s par défaut). En ligne de commande :
+
+```bash
+bobvr-cli render descente.360 --stabilise 0.5
+```
+
+La chaîne est en place : `bobvr/orientation.py` intègre le gyroscope à 802 Hz,
+résout le repère de ses axes depuis le fichier lui-même, lisse **à phase
+nulle** (filtre appliqué en avant puis en arrière, donc sans retard — ce qu'une
+stabilisation embarquée ne peut pas offrir), et le kernel applique une rotation
+par image, lue dans une table indexée par le compteur d'images que
+`program_opencl` lui passe déjà.
+
+Chaque pièce est vérifiée séparément : l'orientation intégrée colle à `CORI` à
+**0,09°** sur une descente de 162 s, une table à l'identité redonne un rendu
+identique au bit près, et une table de période 3 confirme que le compteur
+compte bien les images.
+
+Décochée par défaut, le temps que le résultat soit jugé sur de vraies
+descentes. Les mesures automatiques n'ont pas su trancher — la caméra tourne
+d'environ 0,6° par image, soit moins d'un pixel, pendant que le traîneau
+avance d'un mètre dans un tunnel : la translation écrase la rotation dans
+toute différence d'images. Le contrôle qui a fini par parler est visuel : sur
+la courbe la plus appuyée, un verrouillage de la vue déplace le traîneau de
+104,9°, exactement la rotation que donne la télémétrie.
+
+En 360 il n'y a pas de budget de recadrage : on tourne la sphère, tous les
+pixels existent déjà. Le lissage peut donc être aussi fort qu'on veut — c'est
+ce qui rend l'exercice plus simple ici qu'en vidéo plate, pas plus difficile.
+
+Sans kernel OpenCL, le réglage est indisponible : `v360` n'applique qu'une
+orientation fixe, pas une par image. Le rendu **refuse** plutôt que de sortir
+une vidéo non stabilisée sans le dire.
+
 ## Tests
 
 ```bash

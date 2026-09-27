@@ -114,77 +114,70 @@ static float sample_row(__read_only image2d_t img, float ex, float ey)
     }
 }
 
-/* ---------------------------------------------------------------- geometry */
+/* -------------------------------------------------------------- rotations */
 
-__kernel void gopromax_equirect(__write_only image2d_t dst,
-                                unsigned int index,
-                                __read_only image2d_t track0,
-                                __read_only image2d_t track1)
+/* Quaternions as float4: w in .x, the vector part in .yzw. */
+
+static float4 qmul(float4 a, float4 b)
 {
-    int2 p = (int2)(get_global_id(0), get_global_id(1));
-    int2 dim = get_image_dim(dst);
-    if (p.x >= dim.x || p.y >= dim.y)
-        return;
+    return (float4)(a.x * b.x - dot(a.yzw, b.yzw),
+                    a.x * b.yzw + b.x * a.yzw + cross(a.yzw, b.yzw));
+}
 
-    /* Equirectangular: x spans a full turn, y spans pole to pole. */
-    float lon = ((2.0f * (p.x + 0.5f)) / dim.x - 1.0f) * M_PI_F;
-    float lat = ((2.0f * (p.y + 0.5f)) / dim.y - 1.0f) * M_PI_F * 0.5f;
+static float4 qconj(float4 q)
+{
+    return (float4)(q.x, -q.yzw);
+}
 
-    float cos_lat = cos(lat);
-    float3 v = (float3)(cos_lat * sin(lon), sin(lat), cos_lat * cos(lon));
+static float3 qrot(float4 q, float3 v)
+{
+    /* v + 2w(u x v) + 2u x (u x v), the cheap form of q*v*conj(q). */
+    float3 uv = 2.0f * cross(q.yzw, v);
+    return v + q.x * uv + cross(q.yzw, uv);
+}
 
-#if APPLY_VIEW_SCALE
-    /*
-     * Widen (or tighten) what a player shows when the file opens.
-     *
-     * No metadata field carries a field of view for spherical video, so the
-     * only way to decide it is to bake it into the sphere. A player draws a
-     * rectilinear view: a point at angle b from where it looks lands on screen
-     * at tan(b), scaled by its own fixed field of view. So to make its window
-     * hold a wider view -- and hold it the way a wider lens would, with
-     * straight lines still straight -- the scene has to be pulled outwards in
-     * *tangent* space, not in angle:
-     *
-     *     tan(scene angle) = VIEW_SCALE_C * tan(angle in this file)
-     *
-     * The player's own projection then cancels the tangents exactly, and what
-     * it draws is a true rectilinear view of the wider angle. Pulling on the
-     * angles instead (the obvious thing) leaves tangents in the composition
-     * and bends every straight edge into a curve.
-     *
-     * Written as an atan2 so it holds all the way round: the transform turns
-     * about the viewing axis only, keeps 0, 90 and 180 degrees where they are,
-     * and stays ordered for any positive C -- the sphere is redistributed, not
-     * cut. What the front gains, the far side gives up in sharpness.
-     */
-    float r = length(v.xy);              /* sin of the angle off-axis */
-    if (r > 1e-6f) {
-        float beta = atan2(VIEW_SCALE_C * r, v.z);
-        float s = sin(beta) / r;
-        v = (float3)(v.x * s, v.y * s, cos(beta));
-    }
+/*
+ * A fraction of a rotation: same axis, angle scaled by t.
+ *
+ * Used to ask where the camera was part-way through reading a frame out. The
+ * sign is taken to the shortest arc first, so a table entry that happens to
+ * store the far representative does not send this the long way round.
+ */
+static float4 qpow(float4 q, float t)
+{
+    if (q.x < 0.0f)
+        q = -q;
+    float s = length(q.yzw);
+    if (s < 1e-7f)
+        return (float4)(1.0f, 0.0f, 0.0f, 0.0f);
+    float half_angle = atan2(s, q.x) * t;
+    return (float4)(cos(half_angle), q.yzw * (sin(half_angle) / s));
+}
+
+
+#if APPLY_STABILISATION
+/* One table entry as a quaternion; w is implied by the stored representative. */
+static float4 stab_quat(int f)
+{
+    float3 u = (float3)(STAB_TABLE[3 * f + 0] * STAB_SCALE_INV,
+                        STAB_TABLE[3 * f + 1] * STAB_SCALE_INV,
+                        STAB_TABLE[3 * f + 2] * STAB_SCALE_INV);
+    return (float4)(sqrt(fmax(0.0f, 1.0f - dot(u, u))), u);
+}
 #endif
 
-#if APPLY_ROTATION
-    /* yaw about Y, then pitch about X, then roll about Z. */
-    float cy = cos(YAW_RAD),   sy = sin(YAW_RAD);
-    float cp = cos(PITCH_RAD), sp = sin(PITCH_RAD);
-    float cr = cos(ROLL_RAD),  sr = sin(ROLL_RAD);
-    float3 t;
-    t.x = cy * v.x + sy * v.z;
-    t.y = v.y;
-    t.z = -sy * v.x + cy * v.z;
-    v = t;
-    t.x = v.x;
-    t.y = cp * v.y - sp * v.z;
-    t.z = sp * v.y + cp * v.z;
-    v = t;
-    t.x = cr * v.x - sr * v.y;
-    t.y = sr * v.x + cr * v.y;
-    t.z = v.z;
-    v = t;
-#endif
+/* ------------------------------------------------------ projection */
 
+/*
+ * Where on the two source tracks does a viewing direction land?
+ *
+ * Split out of the kernel body because a rolling shutter has to ask it
+ * twice: once to find out which source row a sample comes from -- which is
+ * what fixes the instant it was captured -- and again once the rotation for
+ * that instant is known.
+ */
+static void to_source(float3 v, float *out_ex, float *out_ey, int *out_row)
+{
     /* Which cube face does this direction hit?  Mirrors ffmpeg's v360 so the
      * output stays interchangeable with the reference implementation. */
     float azim = atan2(v.x, v.z);
@@ -239,6 +232,141 @@ __kernel void gopromax_equirect(__write_only image2d_t dst,
 
     float ex = (fa + col) * (float)EAC_FACE;
     float ey = fb * (float)EAC_FACE;
+    *out_ex = ex;
+    *out_ey = ey;
+    *out_row = row;
+}
+
+/* ---------------------------------------------------------------- geometry */
+
+__kernel void gopromax_equirect(__write_only image2d_t dst,
+                                unsigned int index,
+                                __read_only image2d_t track0,
+                                __read_only image2d_t track1)
+{
+    int2 p = (int2)(get_global_id(0), get_global_id(1));
+    int2 dim = get_image_dim(dst);
+    if (p.x >= dim.x || p.y >= dim.y)
+        return;
+
+    /* Equirectangular: x spans a full turn, y spans pole to pole. */
+    float lon = ((2.0f * (p.x + 0.5f)) / dim.x - 1.0f) * M_PI_F;
+    float lat = ((2.0f * (p.y + 0.5f)) / dim.y - 1.0f) * M_PI_F * 0.5f;
+
+    float cos_lat = cos(lat);
+    float3 v = (float3)(cos_lat * sin(lon), sin(lat), cos_lat * cos(lon));
+
+#if APPLY_VIEW_SCALE
+    /*
+     * Widen (or tighten) what a player shows when the file opens.
+     *
+     * No metadata field carries a field of view for spherical video, so the
+     * only way to decide it is to bake it into the sphere. A player draws a
+     * rectilinear view: a point at angle b from where it looks lands on screen
+     * at tan(b), scaled by its own fixed field of view. So to make its window
+     * hold a wider view -- and hold it the way a wider lens would, with
+     * straight lines still straight -- the scene has to be pulled outwards in
+     * *tangent* space, not in angle:
+     *
+     *     tan(scene angle) = VIEW_SCALE_C * tan(angle in this file)
+     *
+     * The player's own projection then cancels the tangents exactly, and what
+     * it draws is a true rectilinear view of the wider angle. Pulling on the
+     * angles instead (the obvious thing) leaves tangents in the composition
+     * and bends every straight edge into a curve.
+     *
+     * Written as an atan2 so it holds all the way round: the transform turns
+     * about the viewing axis only, keeps 0, 90 and 180 degrees where they are,
+     * and stays ordered for any positive C -- the sphere is redistributed, not
+     * cut. What the front gains, the far side gives up in sharpness.
+     */
+    float r = length(v.xy);              /* sin of the angle off-axis */
+    if (r > 1e-6f) {
+        float beta = atan2(VIEW_SCALE_C * r, v.z);
+        float s = sin(beta) / r;
+        v = (float3)(v.x * s, v.y * s, cos(beta));
+    }
+#endif
+
+#if APPLY_ROTATION
+    /* yaw about Y, then pitch about X, then roll about Z.
+     * A fixed framing choice, so it is applied in the steadied frame -- that
+     * is, before the per-frame rotation below carries the direction back to
+     * where the lens actually was. */
+    float cy = cos(YAW_RAD),   sy = sin(YAW_RAD);
+    float cp = cos(PITCH_RAD), sp = sin(PITCH_RAD);
+    float cr = cos(ROLL_RAD),  sr = sin(ROLL_RAD);
+    float3 t;
+    t.x = cy * v.x + sy * v.z;
+    t.y = v.y;
+    t.z = -sy * v.x + cy * v.z;
+    v = t;
+    t.x = v.x;
+    t.y = cp * v.y - sp * v.z;
+    t.z = sp * v.y + cp * v.z;
+    v = t;
+    t.x = cr * v.x - sr * v.y;
+    t.y = sr * v.x + cr * v.y;
+    t.z = v.z;
+    v = t;
+#endif
+
+#if APPLY_STABILISATION
+    /*
+     * Undo the camera's shake.
+     *
+     * The direction worked out above is where the *steadied* camera looks;
+     * sampling the source needs where the real one was pointing when that
+     * part of the frame was actually captured. STAB_TABLE holds one rotation
+     * per frame, built from the gyroscope at 802 Hz and smoothed with no lag
+     * (see bobvr.orientation).
+     *
+     * The frame number is the one thing program_opencl varies for us: it
+     * passes a counter in `index`, starting at zero for whatever reaches the
+     * filter. STAB_OFFSET puts that back on the clip's own timeline when the
+     * render seeked first. Reads are clamped rather than wrapped so a table
+     * that ends early holds the last rotation instead of snapping back to the
+     * first.
+     */
+    {
+        int f = clamp((int)index + STAB_OFFSET, 0, STAB_FRAMES - 1);
+        float4 q = stab_quat(f);
+        float3 vr = qrot(q, v);
+
+#if APPLY_ROLLING
+        /*
+         * A frame is not an instant: the sensor scans it over ROLLING_SPAN
+         * frame periods, so each part wants the orientation of a slightly
+         * different moment. The table's entry is the middle of that scan and
+         * everything else is offset from it.
+         *
+         * ROLLING_TAU says where in the scan a direction was caught. It is an
+         * expression in the *camera's* frame, which is why it reads `vr` and
+         * not the output direction: the sensor is bolted to the camera, so
+         * the instant follows where the lens was looking, not where the
+         * steadied picture puts it.
+         *
+         * Two passes, because tau needs the frame's own rotation applied
+         * first. One refinement is enough -- it moves the answer by a
+         * fraction of a degree, and a second would move it by far less than a
+         * pixel.
+         *
+         * The rate comes from the table itself, as a central difference over
+         * two frames, which saves storing a second table. It costs only the
+         * smoothed track's motion between neighbours: under a tenth of a
+         * degree, well below what this is correcting.
+         */
+        float4 span = qmul(stab_quat(clamp(f + 1, 0, STAB_FRAMES - 1)),
+                           qconj(stab_quat(clamp(f - 1, 0, STAB_FRAMES - 1))));
+        float tau = ROLLING_TAU;
+        vr = qrot(qmul(qpow(span, (tau - 0.5f) * 0.5f * ROLLING_SPAN), q), v);
+#endif
+        v = vr;
+    }
+#endif
+
+    float ex, ey; int row;
+    to_source(v, &ex, &ey, &row);
 
     float val = (row == 0) ? sample_row(track0, ex, ey)
                            : sample_row(track1, ex, ey);

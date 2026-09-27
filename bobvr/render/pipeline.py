@@ -27,6 +27,9 @@ from .geometry import (
     NEUTRAL_FOV,
     MaxLayout,
     Orientation,
+    ROLLING_AXES,
+    ROLLING_SPAN,
+    TooManyFramesError,
     materialise_kernel,
     view_scale,
 )
@@ -59,6 +62,25 @@ class RenderSettings:
     #: How wide a view the file opens on, in degrees. Baked into the
     #: projection: see ``NEUTRAL_FOV`` for why it cannot be metadata.
     initial_fov: float = NEUTRAL_FOV
+    #: Time constant of the stabilisation smoother, in seconds; 0 turns it off.
+    #: Bigger is calmer, and in 360 that costs nothing but a larger rotation --
+    #: the sphere is turned, not cropped, so there is no margin to run out of.
+    #:
+    #: Off by default until the result has been judged on real runs. Note what
+    #: cannot settle that: any measure built on correlating consecutive frames.
+    #: There is signal enough -- 0.6 degrees a frame is about 7 pixels at 3840
+    #: wide -- but the tunnel's walls repeat, so the correlation locks onto the
+    #: wrong peak often enough to throw impossible values (a whole turn inside
+    #: a second where the gyroscope is quiet). Checking this means looking at
+    #: the picture, or tracking the sled, which cannot be mistaken for itself.
+    stabilise_seconds: float = 0.0
+    #: Sensor scan order, for undoing the rolling shutter's within-frame skew;
+    #: ``None`` corrects each frame as a whole and leaves the skew. See
+    #: ``geometry.ROLLING_AXES``. Only does anything alongside
+    #: ``stabilise_seconds``.
+    rolling_axis: str | None = None
+    #: How long the scan takes to cross the sphere, in frame periods.
+    rolling_span: float = ROLLING_SPAN
     quality: int = 23
     max_bitrate_kbps: int = 60_000
     audio_bitrate_kbps: int = 192
@@ -83,6 +105,15 @@ class RenderSettings:
             raise RenderError(
                 f"Le champ de vision doit être compris entre {MIN_FOV:g}° et "
                 f"{MAX_FOV:g}°."
+            )
+        if self.rolling_axis is not None and self.rolling_axis not in ROLLING_AXES:
+            raise RenderError(
+                f"Ordre de lecture du capteur inconnu : {self.rolling_axis!r}."
+            )
+        if self.stabilise_seconds < 0:
+            raise RenderError(
+                "La constante de lissage de la stabilisation ne peut pas être "
+                "négative ; 0 la désactive."
             )
 
 
@@ -182,8 +213,16 @@ class Renderer:
 
         a, b = info.video[0].index, info.video[1].index
         if use_gpu:
-            graph = self._gpu_graph(a, b, layout, settings)
+            table, offset = self._stabilisation(info, settings)
+            graph = self._gpu_graph(a, b, layout, settings, table, offset)
         elif self.caps.has_v360:
+            if settings.stabilise_seconds > 0:
+                # v360 takes one fixed orientation for the whole render; there
+                # is nowhere to put a rotation that changes with the frame.
+                raise RenderError(
+                    "La stabilisation demande le kernel OpenCL : le repli "
+                    "logiciel ne sait appliquer qu'une orientation fixe."
+                )
             graph = self._cpu_graph(a, b, layout, settings)
         else:
             raise RenderError(
@@ -195,13 +234,66 @@ class Renderer:
 
     # ------------------------------------------------------------- graphs
 
+    def _stabilisation(
+        self, info: MaxVideoInfo, settings: RenderSettings
+    ) -> tuple[list[tuple[float, float, float, float]] | None, int]:
+        """The per-frame rotations for this clip, and where to start reading.
+
+        The table is indexed by the clip's own frame numbering, while the
+        kernel counts from zero at whatever reaches it -- so a render that
+        seeks first has to say how far in it started.
+        """
+        if settings.stabilise_seconds <= 0:
+            return None, 0
+        from .. import orientation, telemetry
+
+        try:
+            tel = telemetry.extract(info.path, info, self.caps)
+            frame = orientation.solve_gyro_frame(tel)
+            # One entry per *video* frame, which is what the kernel counts.
+            #
+            # CORI runs at the video frame rate, and sample k belongs to frame
+            # k: the table is therefore sampled from the first quaternion's
+            # own instant, one frame period apart. That alignment was measured
+            # on the picture two independent ways -- the launch, where a still
+            # image and a still gyroscope start moving together (-0.188 s),
+            # and a fit of image rotation against gyroscope rotation over the
+            # hardest curve (-0.1815 s). Both land on CORI[0] = -0.1851 s.
+            #
+            # Do *not* subtract ``clock_offset_us`` here. VPTS - STMP is 1.1 s
+            # on this camera and putting it in shifts the table by 38 frames,
+            # which is what the measurements above rule out.
+            fps = info.fps or 30.0
+            count = round((info.duration or 0.0) * fps) + 1
+            stamps = tel.sensor_times("CORI")
+            first = stamps[0] if stamps else 0.0
+            times = [first + k / fps for k in range(count)]
+            table = orientation.stabilise(
+                tel, times, settings.stabilise_seconds, frame)
+        except (telemetry.TelemetryError, orientation.OrientationError) as exc:
+            raise RenderError(f"Stabilisation impossible : {exc}") from exc
+        if not frame.trustworthy:
+            raise RenderError(
+                f"Les axes du gyroscope n'ont pas pu être établis de façon "
+                f"fiable sur {info.path.name} (résidu {frame.residual:.0%} sur "
+                f"{frame.windows} fenêtres) ; la stabilisation serait fausse."
+            )
+        offset = round((settings.start or 0.0) * (info.fps or 30.0))
+        return table, offset
+
     def _gpu_graph(
-        self, a: int, b: int, layout: MaxLayout, settings: RenderSettings
+        self, a: int, b: int, layout: MaxLayout, settings: RenderSettings,
+        stabilisation: list[tuple[float, float, float, float]] | None = None,
+        frame_offset: int = 0,
     ) -> str:
-        kernel = materialise_kernel(
-            self.cache_dir, layout, settings.orientation, settings.cubic,
-            settings.initial_fov,
-        )
+        try:
+            kernel = materialise_kernel(
+                self.cache_dir, layout, settings.orientation, settings.cubic,
+                settings.initial_fov, stabilisation, frame_offset,
+                settings.rolling_axis, settings.rolling_span,
+            )
+        except TooManyFramesError as exc:
+            raise RenderError(str(exc)) from exc
         # Forward slashes keep the path valid inside a filter description on
         # Windows, where a backslash would be read as an escape.
         source = str(kernel).replace("\\", "/").replace(":", r"\:")

@@ -53,6 +53,13 @@ class RenderConfig(BaseModel):
     #: view opens wider, below it tightens.
     initial_fov: float = Field(default=80.0, ge=40.0, le=150.0)
 
+    #: Whether the picture is steadied from the gyroscope, and how hard.
+    #: ``stabilise_seconds`` is the smoother's time constant: bigger is calmer.
+    #: In 360 a larger correction costs nothing but a bigger rotation, since
+    #: the sphere is turned rather than cropped.
+    stabilise: bool = False
+    stabilise_seconds: float = Field(default=0.5, gt=0.0, le=5.0)
+
     @field_validator("width")
     @classmethod
     def _even_width(cls, v: int) -> int:

@@ -312,6 +312,8 @@ class Orchestrator:
             orientation=Orientation(config.yaw, config.pitch, config.roll),
             cubic=config.cubic,
             initial_fov=config.initial_fov,
+            stabilise_seconds=(config.stabilise_seconds
+                               if config.stabilise else 0.0),
             quality=config.quality,
             max_bitrate_kbps=config.max_bitrate_kbps,
             audio_bitrate_kbps=config.audio_bitrate_kbps,
