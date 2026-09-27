@@ -15,17 +15,19 @@ on:
   workflow_dispatch:
     inputs:
       exiftool_version:
-        description: "Version d'exiftool à embarquer (depuis exiftool.org)"
+        description: "Version d'exiftool à embarquer (vide = version courante d'exiftool.org)"
         required: false
-        default: "13.10"
+        default: ""
 
 permissions:
   contents: write        # nécessaire pour publier la release
 
 env:
-  # Bump ici pour changer la version d'exiftool embarquée. La valeur du
-  # déclenchement manuel a la priorité si elle est fournie.
-  EXIFTOOL_VERSION: ${{ github.event.inputs.exiftool_version || '13.10' }}
+  # Vide par défaut : l'étape lit la version courante sur exiftool.org
+  # (https://exiftool.org/ver.txt). On ne fige pas de numéro, sinon il tombe
+  # en 404 dès qu'exiftool publie une nouvelle version et déplace l'ancienne.
+  # Le déclenchement manuel peut forcer une version précise.
+  EXIFTOOL_VERSION: ${{ github.event.inputs.exiftool_version }}
   # Build ffmpeg complète (OpenCL + NVENC). L'URL « latest » de BtbN est
   # stable ; c'est une des deux sources recommandées dans docs/windows.md.
   FFMPEG_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
@@ -100,6 +102,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $ver = "$env:EXIFTOOL_VERSION"
+          if (-not $ver) {
+            # Version courante, toujours servie à la racine du site ; les
+            # anciennes partent dans /older/ et une URL figée finit en 404.
+            $ver = (Invoke-WebRequest -Uri "https://exiftool.org/ver.txt" -UseBasicParsing).Content.Trim()
+          }
           $url = "https://exiftool.org/exiftool-${ver}_64.zip"
           Write-Host "Téléchargement d'exiftool $ver…"
           Invoke-WebRequest -Uri $url -OutFile exiftool.zip
