@@ -144,6 +144,37 @@ def test_check_swallows_network_errors():
     assert check_for_update("0.1.0", fetch=boom) is None
 
 
+# ------------------------------------------------------ check() (with reason)
+
+
+def test_check_distinguishes_update_uptodate_and_error():
+    from bobvr.updater import check
+
+    release, error = check("0.1.0", fetch=_payload)
+    assert release is not None and error is None
+
+    release, error = check("0.2.0", fetch=_payload)
+    assert release is None and error is None            # up to date
+
+    def boom():
+        raise OSError("pas de réseau")
+
+    release, error = check("0.1.0", fetch=boom)
+    assert release is None and error                    # a reason is given
+
+
+def test_check_names_the_private_repo_404():
+    import urllib.error
+    from bobvr.updater import check
+
+    def not_found():
+        raise urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+
+    release, error = check("0.1.0", fetch=not_found)
+    assert release is None
+    assert "404" in error and "priv" in error.lower()
+
+
 # ---------------------------------------------------------------- staging
 
 

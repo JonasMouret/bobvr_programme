@@ -80,14 +80,14 @@ def _show_splash() -> "QSplashScreen | None":
 
     width, height = 360, 320
     canvas = QPixmap(width, height)
-    canvas.fill(QColor("#000000"))          # the logo sits on black; it blends in
+    canvas.fill(QColor("#ffffff"))          # white, so the logo's dark parts read
     painter = QPainter(canvas)
     painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
     scaled = source.scaled(248, 248, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     painter.drawPixmap(
         (width - scaled.width()) // 2, (height - 44 - scaled.height()) // 2, scaled
     )
-    painter.setPen(QColor("#2a2a2a"))       # a hairline so the edge shows on a dark desktop
+    painter.setPen(QColor("#d9dee3"))       # a hairline so the edge shows on white
     painter.drawRect(0, 0, width - 1, height - 1)
     painter.end()
 
@@ -103,7 +103,7 @@ def _splash_note(splash, text: str) -> None:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor
 
-    splash.showMessage(text, Qt.AlignBottom | Qt.AlignHCenter, QColor("#d0d7de"))
+    splash.showMessage(text, Qt.AlignBottom | Qt.AlignHCenter, QColor("#33475b"))
     QApplication.processEvents()
 
 

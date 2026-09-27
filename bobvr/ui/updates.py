@@ -36,7 +36,7 @@ from ..updater import (
     Release,
     apply_update,
     can_self_update,
-    check_for_update,
+    check,
     download_asset,
     stage_update,
     staging_root,
@@ -48,16 +48,18 @@ _MB = 1024 * 1024
 
 
 class CheckWorker(QThread):
-    """Interroge GitHub sur un fil séparé et rend une :class:`Release` ou rien."""
+    """Interroge GitHub sur un fil séparé et rend ``(release, erreur)``."""
 
-    result = Signal(object)  # Release | None
+    #: ``(Release | None, str | None)`` — voir :func:`bobvr.updater.check`.
+    result = Signal(object, object)
 
     def run(self) -> None:  # pragma: no cover - réseau
         try:
-            self.result.emit(check_for_update())
-        except Exception:  # check_for_update avale déjà tout ; ceinture et bretelles
+            release, error = check()
+            self.result.emit(release, error)
+        except Exception as exc:  # check() avale déjà tout ; ceinture et bretelles
             log.debug("échec inattendu de la vérification", exc_info=True)
-            self.result.emit(None)
+            self.result.emit(None, str(exc))
 
 
 class DownloadWorker(QThread):

@@ -704,16 +704,19 @@ class MainWindow(QMainWindow):
         self._check_worker = worker
         worker.start()
 
-    def _on_silent_result(self, release) -> None:
+    def _on_silent_result(self, release, error) -> None:
+        # Silent check: only speak up when there is something to install.
         if release is not None:
             self._show_update_banner(release)
 
-    def _on_manual_result(self, release) -> None:
-        if release is None:
-            QMessageBox.information(
-                self, "Mises à jour", f"BobVr {__version__} est à jour."
-            )
+    def _on_manual_result(self, release, error) -> None:
+        if error:
+            self.note("error", f"Vérification des mises à jour impossible : {error}")
             return
+        if release is None:
+            self.note("info", f"BobVr {__version__} est à jour.")
+            return
+        self.note("info", f"Mise à jour disponible : BobVr {release.version}.")
         UpdateDialog(release, self).exec()
 
     def _show_update_banner(self, release) -> None:

@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -163,17 +164,32 @@ def _fetch_json(url: str, timeout: float) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def check_for_update(
+def _friendly_error(exc: Exception) -> str:
+    """A short, operator-facing reason a check could not complete."""
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+        return (
+            "dépôt introuvable (404). Si le dépôt GitHub est privé, l'API des "
+            "versions n'est pas accessible sans authentification — l'auto-mise "
+            "à jour demande un dépôt public."
+        )
+    if isinstance(exc, urllib.error.URLError):
+        return f"connexion impossible ({exc.reason})."
+    return str(exc)
+
+
+def check(
     current_version: str | None = None,
     *,
     fetch: Callable[[], dict] | None = None,
     timeout: float = 8.0,
-) -> Release | None:
-    """La dernière release, uniquement si elle est plus récente qu'ici.
+) -> tuple[Release | None, str | None]:
+    """Vérifie GitHub et distingue les trois issues, sans jamais lever.
 
-    Ne lève jamais : une vérification qui échoue (pas de réseau, API muette,
-    réponse illisible) renvoie ``None`` et se contente d'un message de log. Le
-    démarrage de l'app ne doit jamais dépendre de GitHub.
+    Renvoie ``(release, erreur)`` :
+    - ``(release, None)`` : une version plus récente est disponible ;
+    - ``(None, None)`` : on est à jour ;
+    - ``(None, message)`` : la vérification n'a pas pu aboutir (hors ligne,
+      dépôt privé donnant 404, réponse illisible…).
 
     ``fetch`` est injectable pour les tests ; par défaut, on interroge l'API.
     """
@@ -183,14 +199,28 @@ def check_for_update(
         payload = fetch()
     except Exception as exc:  # réseau, DNS, timeout, JSON… tout est non fatal
         log.info("vérification des mises à jour impossible : %s", exc)
-        return None
+        return None, _friendly_error(exc)
 
     release = parse_release(payload)
-    if release is None:
-        return None
-    if not is_newer(release.version, current):
-        log.debug("à jour : %s (dernière publiée : %s)", current, release.version)
-        return None
+    if release is None or not is_newer(release.version, current):
+        log.debug("à jour : %s", current)
+        return None, None
+    return release, None
+
+
+def check_for_update(
+    current_version: str | None = None,
+    *,
+    fetch: Callable[[], dict] | None = None,
+    timeout: float = 8.0,
+) -> Release | None:
+    """La dernière release, uniquement si elle est plus récente qu'ici.
+
+    Enveloppe :func:`check` en n'exposant que la release : une erreur ou un
+    « à jour » donnent ``None``. Pratique pour la vérification silencieuse au
+    lancement, qui ne doit jamais gêner.
+    """
+    release, _error = check(current_version, fetch=fetch, timeout=timeout)
     return release
 
 
