@@ -27,9 +27,16 @@ def test_a_tool_on_the_path_wins(monkeypatch):
     assert find_tool("ffmpeg") == "/usr/bin/ffmpeg"
 
 
-@pytest.mark.parametrize("subdir", [".", "vendor", "ffmpeg/bin"])
+@pytest.mark.parametrize(
+    "subdir",
+    [".", "vendor", "ffmpeg/bin", "_internal/vendor", "_internal/ffmpeg/bin"],
+)
 def test_a_tool_shipped_beside_the_app_is_found(monkeypatch, tmp_path, subdir):
-    """An unzipped build has no PATH: the tools travel with the .exe."""
+    """An unzipped build has no PATH: the tools travel with the .exe.
+
+    The ``_internal`` cases are the ones PyInstaller 6 actually produces: it
+    files bundled data under ``_internal`` rather than beside the executable.
+    """
     suffix = ".exe" if sys.platform == "win32" else ""
     tool = tmp_path / subdir / f"ffmpeg{suffix}"
     tool.parent.mkdir(parents=True, exist_ok=True)

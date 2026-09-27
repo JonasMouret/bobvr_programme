@@ -12,6 +12,7 @@ import logging
 import sys
 from pathlib import Path
 
+from . import __version__
 from .config import Settings
 from .render.caps import FFmpegMissingError, detect
 
@@ -48,6 +49,9 @@ def _add_render_arguments(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bobvr", description="Traitement des vidéos GoPro MAX pour la piste de bob."
+    )
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"BobVr {__version__}"
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
@@ -126,6 +130,7 @@ def command_label(device: str | None, card_id: str | None) -> int:
 
 
 def command_info() -> int:
+    print(f"BobVr {__version__}")
     caps = detect()
     print(caps.summary())
     print()

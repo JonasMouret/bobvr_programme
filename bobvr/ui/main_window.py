@@ -9,6 +9,7 @@ and the render queue runs quietly underneath.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, QTimer
@@ -20,6 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -50,10 +52,12 @@ from ..db import (
     Clip,
     Database,
 )
+from .. import __version__
 from ..jobs import Orchestrator
 from .bridge import Bridge
 from .cleanup_dialog import CleanupDialog
 from .settings_dialog import SettingsDialog
+from .updates import CheckWorker, UpdateDialog
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +93,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("BobVr — traitement des vidéos 360")
         self.resize(1180, 780)
 
+        self._build_menu()
         self._build_toolbar()
         self._build_body()
         self._build_statusbar()
@@ -100,6 +105,14 @@ class MainWindow(QMainWindow):
         self.refresh_clips()
         self.refresh_cards()
 
+        # Mises à jour. La vérification au lancement ne tourne que pour une
+        # build installée : depuis les sources il n'y a rien à remplacer, et
+        # inutile d'appeler GitHub à chaque lancement de développement.
+        self._check_worker: CheckWorker | None = None
+        self._pending_release = None
+        if getattr(sys, "frozen", False):
+            QTimer.singleShot(1500, self._check_updates_silent)
+
         # The watcher already reports arrivals; this only keeps the card panel
         # honest if a volume disappears without an event.
         self._card_timer = QTimer(self)
@@ -107,6 +120,15 @@ class MainWindow(QMainWindow):
         self._card_timer.start(3000)
 
     # -------------------------------------------------------------- build
+
+    def _build_menu(self) -> None:
+        help_menu = self.menuBar().addMenu("Aide")
+        check = QAction("Vérifier les mises à jour…", self)
+        check.triggered.connect(self._check_updates_manual)
+        help_menu.addAction(check)
+        about = QAction("À propos de BobVr", self)
+        about.triggered.connect(self._about)
+        help_menu.addAction(about)
 
     def _build_toolbar(self) -> None:
         from PySide6.QtCore import QSize
@@ -232,7 +254,42 @@ class MainWindow(QMainWindow):
 
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([110, 430, 280])
-        self.setCentralWidget(splitter)
+
+        # A dismissible update banner sits above everything, hidden until a
+        # newer version is found. It never steals focus the way a dialog on
+        # startup would.
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_update_banner())
+        outer.addWidget(splitter)
+        self.setCentralWidget(container)
+
+    def _build_update_banner(self) -> QWidget:
+        banner = QFrame()
+        banner.setVisible(False)
+        # Colours set for both text and background so the bar reads the same
+        # on a light or a dark desktop, rather than inheriting one and not the
+        # other.
+        banner.setStyleSheet(
+            "QFrame { background: #E7F1FB; border-bottom: 1px solid #B9D4F0; }"
+            "QLabel { color: #1A2B3C; }"
+        )
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(12, 6, 12, 6)
+        self.update_banner_label = QLabel()
+        self.update_banner_label.setTextFormat(Qt.RichText)
+        self.update_banner_label.setWordWrap(True)
+        row.addWidget(self.update_banner_label, 1)
+        update_btn = QPushButton("Mettre à jour")
+        update_btn.clicked.connect(self._open_update_dialog)
+        later_btn = QPushButton("Plus tard")
+        later_btn.clicked.connect(lambda: self.update_banner.setVisible(False))
+        row.addWidget(update_btn)
+        row.addWidget(later_btn)
+        self.update_banner = banner
+        return banner
 
     def _build_statusbar(self) -> None:
         caps = self.orchestrator.caps
@@ -626,6 +683,60 @@ class MainWindow(QMainWindow):
                 "importations et aux prochains rendus.",
             )
             self.refresh_cards()
+
+    # ------------------------------------------------------- mises à jour
+
+    def _check_updates_silent(self) -> None:
+        """Vérification de fond au lancement : muette s'il n'y a rien."""
+        self._run_update_check(self._on_silent_result)
+
+    def _check_updates_manual(self) -> None:
+        """Le bouton « Vérifier les mises à jour » : donne toujours un retour."""
+        self.note("info", "Recherche de mises à jour…")
+        self._run_update_check(self._on_manual_result)
+
+    def _run_update_check(self, on_result) -> None:
+        if self._check_worker is not None and self._check_worker.isRunning():
+            return
+        worker = CheckWorker(self)
+        worker.result.connect(on_result)
+        worker.finished.connect(worker.deleteLater)
+        self._check_worker = worker
+        worker.start()
+
+    def _on_silent_result(self, release) -> None:
+        if release is not None:
+            self._show_update_banner(release)
+
+    def _on_manual_result(self, release) -> None:
+        if release is None:
+            QMessageBox.information(
+                self, "Mises à jour", f"BobVr {__version__} est à jour."
+            )
+            return
+        UpdateDialog(release, self).exec()
+
+    def _show_update_banner(self, release) -> None:
+        self._pending_release = release
+        self.update_banner_label.setText(
+            f"<b>BobVr {release.version}</b> est disponible — "
+            f"vous utilisez la {__version__}."
+        )
+        self.update_banner.setVisible(True)
+
+    def _open_update_dialog(self) -> None:
+        if self._pending_release is None:
+            return
+        self.update_banner.setVisible(False)
+        UpdateDialog(self._pending_release, self).exec()
+
+    def _about(self) -> None:
+        QMessageBox.about(
+            self,
+            "À propos de BobVr",
+            f"<b>BobVr {__version__}</b><br>"
+            "Import et conversion des vidéos GoPro MAX de la piste de bobsleigh.",
+        )
 
     def closeEvent(self, event) -> None:
         if self.orchestrator.current_clip or self.orchestrator.current_card:

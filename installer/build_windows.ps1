@@ -97,7 +97,7 @@ Write-Host "Accélération vue par la build :" -ForegroundColor Cyan
 # --- archive --------------------------------------------------------------
 
 if ($Zip) {
-    $ver = & $python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text('utf-8'))['project']['version'])"
+    $ver = & $python -c "import bobvr; print(bobvr.__version__)"
     $archive = Join-Path $root "dist\BobVr-$ver-win64.zip"
     if (Test-Path $archive) { Remove-Item $archive }
     Compress-Archive -Path $out -DestinationPath $archive

@@ -235,7 +235,17 @@ def app_dir() -> Path:
 #: ``vendor`` is where the Windows build drops ffmpeg and exiftool;
 #: ``ffmpeg/bin`` matches the layout of the official Windows archives, so an
 #: operator can unzip one whole and be done.
-_TOOL_SUBDIRS = (".", "vendor", "ffmpeg/bin", "exiftool")
+#:
+#: The ``_internal`` variants matter because PyInstaller 6 puts bundled data
+#: under a ``_internal`` folder next to the executable, not at the top level as
+#: version 5 did: our spec ships ffmpeg and exiftool as data, so on a frozen
+#: build they actually land in ``_internal/vendor``. ``app_dir()`` points at the
+#: executable's own folder, one level above ``_internal``, so these relative
+#: paths reach them.
+_TOOL_SUBDIRS = (
+    ".", "vendor", "ffmpeg/bin", "exiftool",
+    "_internal/vendor", "_internal/ffmpeg/bin", "_internal",
+)
 
 
 def find_tool(name: str) -> str | None:

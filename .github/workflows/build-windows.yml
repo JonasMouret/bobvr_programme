@@ -1,0 +1,160 @@
+name: Build Windows
+
+# Un tag « vX.Y.Z » construit BobVr sur un runner Windows et publie une
+# GitHub Release avec le zip. C'est ce zip que l'application va chercher toute
+# seule pour se mettre à jour (voir bobvr/updater.py).
+#
+# Le déclenchement manuel (« Run workflow ») produit la même build en artefact
+# téléchargeable, sans publier de release — pratique pour tester le CI sans
+# poser de tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      exiftool_version:
+        description: "Version d'exiftool à embarquer (depuis exiftool.org)"
+        required: false
+        default: "13.10"
+
+permissions:
+  contents: write        # nécessaire pour publier la release
+
+env:
+  # Bump ici pour changer la version d'exiftool embarquée. La valeur du
+  # déclenchement manuel a la priorité si elle est fournie.
+  EXIFTOOL_VERSION: ${{ github.event.inputs.exiftool_version || '13.10' }}
+  # Build ffmpeg complète (OpenCL + NVENC). L'URL « latest » de BtbN est
+  # stable ; c'est une des deux sources recommandées dans docs/windows.md.
+  FFMPEG_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Garde-fou : le tag et la version compilée doivent coïncider, sinon
+      # l'app se croirait à jour après une mise à jour. On lit __version__
+      # sans installer le paquet (l'attribut est un simple littéral).
+      - name: Vérifier que le tag correspond à la version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          $ver = python -c "import bobvr; print(bobvr.__version__)"
+          Write-Host "tag=$tag  bobvr.__version__=$ver"
+          if ($tag -ne $ver) {
+            throw "Le tag $tag ne correspond pas à bobvr.__version__ ($ver). " +
+                  "Mettez à jour bobvr/__init__.py avant de poser le tag."
+          }
+
+      # --- outils externes à embarquer dans installer/vendor ---------------
+
+      - name: Télécharger ffmpeg (OpenCL + NVENC)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path installer\vendor | Out-Null
+          Write-Host "Téléchargement de ffmpeg…"
+          Invoke-WebRequest -Uri "$env:FFMPEG_URL" -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract -Force
+          foreach ($tool in "ffmpeg.exe", "ffprobe.exe") {
+            $found = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter $tool |
+                     Select-Object -First 1
+            if (-not $found) { throw "$tool absent de l'archive ffmpeg." }
+            Copy-Item $found.FullName installer\vendor\$tool -Force
+          }
+
+      - name: Vérifier que ffmpeg a bien OpenCL et NVENC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ffmpeg = "installer\vendor\ffmpeg.exe"
+          $filters  = & $ffmpeg -hide_banner -filters
+          $encoders = & $ffmpeg -hide_banner -encoders
+          if (-not ($filters  | Select-String "program_opencl")) {
+            throw "Cette build ffmpeg n'a pas program_opencl : la projection GPU serait indisponible."
+          }
+          if (-not ($encoders | Select-String "h264_nvenc")) {
+            throw "Cette build ffmpeg n'a pas h264_nvenc : l'encodage GPU serait indisponible."
+          }
+          Write-Host "ffmpeg : program_opencl et h264_nvenc présents."
+
+      # exiftool est optionnel : sans lui, les MP4 sortent sans métadonnées 360
+      # et s'ouvrent à plat. On ne bloque donc pas la release si exiftool.org
+      # a un hoquet, mais on le signale bruyamment.
+      - name: Télécharger exiftool
+        id: exiftool
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = "$env:EXIFTOOL_VERSION"
+          $url = "https://exiftool.org/exiftool-${ver}_64.zip"
+          Write-Host "Téléchargement d'exiftool $ver…"
+          Invoke-WebRequest -Uri $url -OutFile exiftool.zip
+          Expand-Archive -Path exiftool.zip -DestinationPath exiftool-extract -Force
+          # L'archive Windows livre « exiftool(-k).exe » ; BobVr attend « exiftool.exe ».
+          $exe = Get-ChildItem -Path exiftool-extract -Recurse -Filter "exiftool*.exe" |
+                 Select-Object -First 1
+          if (-not $exe) { throw "exiftool.exe introuvable dans l'archive." }
+          Copy-Item $exe.FullName installer\vendor\exiftool.exe -Force
+          $files = Get-ChildItem -Path exiftool-extract -Recurse -Directory -Filter "exiftool_files" |
+                   Select-Object -First 1
+          if ($files) {
+            Copy-Item $files.FullName installer\vendor\exiftool_files -Recurse -Force
+          }
+          Write-Host "exiftool embarqué."
+
+      - name: Avertir si exiftool manque
+        if: steps.exiftool.outcome == 'failure'
+        shell: pwsh
+        run: Write-Host "::warning::exiftool n'a pas pu être téléchargé ; la build sortira sans métadonnées 360."
+
+      # --- build -----------------------------------------------------------
+
+      - name: Construire l'exécutable
+        shell: pwsh
+        run: .\installer\build_windows.ps1 -SkipVenv -Zip
+
+      - name: Retrouver le zip produit
+        id: artefact
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist\BobVr-*-win64.zip | Select-Object -First 1
+          if (-not $zip) { throw "Aucun zip produit dans dist\." }
+          "path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($zip.Name)"     >> $env:GITHUB_OUTPUT
+          Write-Host "Archive : $($zip.Name)"
+
+      - name: Publier l'artefact de build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artefact.outputs.name }}
+          path: ${{ steps.artefact.outputs.path }}
+          retention-days: 14
+
+      # --- release (uniquement sur un tag) ---------------------------------
+
+      - name: Publier la release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release create "${{ github.ref_name }}" `
+            "${{ steps.artefact.outputs.path }}" `
+            --title "BobVr ${{ github.ref_name }}" `
+            --generate-notes `
+            --latest

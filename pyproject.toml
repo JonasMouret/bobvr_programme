@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bobvr"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Automatise l'import et la conversion des vidéos GoPro MAX d'une piste de bobsleigh"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +25,9 @@ bobvr = "bobvr.ui.app:main"
 
 [project.scripts]
 bobvr-cli = "bobvr.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "bobvr.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["bobvr*"]
