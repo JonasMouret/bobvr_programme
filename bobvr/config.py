@@ -28,6 +28,15 @@ FLEET_LABELS: dict[str, str] = {
     "R": "Bob Racing",
 }
 
+#: Discipline sub-folder per card prefix. The library tree groups captures as
+#: <root>/<discipline>/<engin>/<date>/, e.g. equirect/bob_raft/B1/2026-09-27/,
+#: so a season sorts itself by kind of sled, then by sled, then by day.
+DISCIPLINE_DIRS: dict[str, str] = {
+    "B": "bob_raft",
+    "R": "bob_race",
+    "S": "speed_luge",
+}
+
 
 def config_path() -> Path:
     return Path(user_config_dir(APP_NAME, appauthor=False)) / "settings.json"
@@ -123,6 +132,22 @@ class Settings(BaseModel):
     @property
     def render_root(self) -> Path:
         return self.library_root / self.render_dirname
+
+    def discipline_dir(self, card_id: str) -> str:
+        """Folder name for a card's discipline, from its prefix.
+
+        An unknown prefix falls back to that letter rather than dropping the
+        clip somewhere unrelated; an empty id lands in ``autre``.
+        """
+        return DISCIPLINE_DIRS.get(card_id[:1].upper(), card_id[:1].lower() or "autre")
+
+    def archive_dir(self, card_id: str, capture_date: str) -> Path:
+        """Where a card's originals for one day live: discipline/engin/date."""
+        return self.archive_root / self.discipline_dir(card_id) / card_id / capture_date
+
+    def render_dir(self, card_id: str, capture_date: str) -> Path:
+        """Where a card's renders for one day live: discipline/engin/date."""
+        return self.render_root / self.discipline_dir(card_id) / card_id / capture_date
 
     def known_card_ids(self) -> list[str]:
         return [

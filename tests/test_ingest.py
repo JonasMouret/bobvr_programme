@@ -12,8 +12,29 @@ from pathlib import Path
 
 import pytest
 
+from bobvr.config import Settings
 from bobvr.db import STATUS_INGESTED, Database
 from bobvr.ingest import IngestError, Ingestor
+
+
+@pytest.mark.parametrize(
+    "card_id, discipline",
+    [("B1", "bob_raft"), ("R3", "bob_race"), ("S6", "speed_luge")],
+)
+def test_the_library_tree_is_discipline_then_engin_then_date(card_id, discipline, tmp_path):
+    """<root>/<discipline>/<engin>/<date>/ — the layout captures sort into."""
+    settings = Settings(library_root=tmp_path / "video")
+    got = settings.render_dir(card_id, "2026-09-27")
+    assert got == settings.render_root / discipline / card_id / "2026-09-27"
+    # Originals follow the same shape under their own root.
+    assert settings.archive_dir(card_id, "2026-09-27") == (
+        settings.archive_root / discipline / card_id / "2026-09-27"
+    )
+
+
+def test_an_unknown_prefix_keeps_the_clip_rather_than_dropping_it(tmp_path):
+    settings = Settings(library_root=tmp_path)
+    assert settings.discipline_dir("X2") == "x"
 
 
 
@@ -49,7 +70,7 @@ def test_copies_renames_verifies_and_clears_the_card(
 
     assert report.ok, report.failures
     assert len(report.copied) == 1
-    archived = settings.archive_root / "2026-02-03" / "B1_1.360"
+    archived = settings.archive_dir("B1", "2026-02-03") / "B1_1.360"
     assert archived.is_file()
     assert archived.stat().st_size == sample_360.stat().st_size
     # Source cleared and card ejected only after a clean copy.
@@ -79,7 +100,7 @@ def test_second_clip_of_the_day_continues_the_numbering(
     assert report.ok, report.failures
     names = sorted(c.name for c in (db.clip(i) for i in report.copied))
     assert names == ["B1_1", "B1_2"]
-    day = settings.archive_root / "2026-02-03"
+    day = settings.archive_dir("B1", "2026-02-03")
     assert {p.name for p in day.glob("*.360")} == {"B1_1.360", "B1_2.360"}
 
 
@@ -236,9 +257,8 @@ def test_checksum_mismatch_keeps_the_card_intact(
     assert source.exists(), "la carte a été vidée malgré une vérification échouée"
     assert report.deleted == 0
     assert not fake_backend.ejected, "une carte en échec ne doit pas être éjectée"
-    assert not list((settings.archive_root / "2026-02-03").glob("*")) or not (
-        settings.archive_root / "2026-02-03" / "B1_1.360"
-    ).exists()
+    archive_day = settings.archive_dir("B1", "2026-02-03")
+    assert not archive_day.exists() or not (archive_day / "B1_1.360").exists()
 
 
 def test_verification_can_be_switched_off(

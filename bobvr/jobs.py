@@ -266,7 +266,8 @@ class Orchestrator:
             return
 
         destination = (
-            self.settings.render_root / clip.capture_date / f"{clip.name}.mp4"
+            self.settings.render_dir(clip.card_id, clip.capture_date)
+            / f"{clip.name}.mp4"
         )
         settings = self._render_settings()
 

@@ -298,7 +298,8 @@ class Ingestor:
 
         clip = self.db.allocate_clip(card.card_id, day, source_name=source.name)
         destination = (
-            self.settings.archive_root / day.isoformat() / f"{clip.name}{source.suffix.lower()}"
+            self.settings.archive_dir(card.card_id, day.isoformat())
+            / f"{clip.name}{source.suffix.lower()}"
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_name(destination.name + ".part")

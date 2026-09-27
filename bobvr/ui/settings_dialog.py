@@ -102,10 +102,10 @@ class SettingsDialog(QDialog):
         form.addRow("Sous-dossier des rendus", self.render_edit)
 
         note = QLabel(
-            "Les fichiers sont rangés par jour : "
-            "<code>bibliothèque/originaux/2026-02-03/B1_1.360</code> et "
-            "<code>bibliothèque/equirect/2026-02-03/B1_1.mp4</code>.<br>"
-            "Les fichiers .360 d'origine sont conservés : ils sont nécessaires "
+            "Les fichiers sont rangés par discipline, engin puis jour : "
+            "<code>bibliothèque/originaux/bob_raft/B1/2026-02-03/B1_1.360</code> "
+            "et <code>bibliothèque/equirect/bob_raft/B1/2026-02-03/B1_1.mp4</code>."
+            "<br>Les fichiers .360 d'origine sont conservés : ils sont nécessaires "
             "pour refaire un rendu ou exploiter la télémétrie."
         )
         note.setWordWrap(True)

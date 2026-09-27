@@ -10,6 +10,7 @@ rather than assuming it worked.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -144,17 +145,22 @@ def _size(path: Path | None) -> int:
 
 
 def _prune_empty_days(settings: Settings) -> None:
-    """Drop day folders nothing lives in any more.
+    """Drop empty folders nothing lives in any more.
 
-    Cosmetic, but a library full of empty dated folders is a library nobody
-    trusts to tell them what is there.
+    Cosmetic, but a library full of empty folders is a library nobody trusts to
+    tell them what is there. The tree is several levels deep now
+    (discipline/engin/date), so this walks bottom-up: emptying a day's folder
+    also lets its engin and discipline folders go if nothing else remains.
     """
     for root in (settings.render_root, settings.archive_root):
         if not root.is_dir():
             continue
-        for day in sorted(root.iterdir()):
+        for current, _dirs, _files in os.walk(root, topdown=False):
+            path = Path(current)
+            if path == root:
+                continue                    # keep the library's own roots
             try:
-                if day.is_dir() and not any(day.iterdir()):
-                    day.rmdir()
+                if not any(path.iterdir()):
+                    path.rmdir()
             except OSError as exc:
-                log.debug("could not remove %s: %s", day, exc)
+                log.debug("could not remove %s: %s", path, exc)

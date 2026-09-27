@@ -26,12 +26,12 @@ def db(tmp_path):
 def make_clip(db: Database, settings, name_seed: int, *, rendered: bool = True):
     """A clip with real files under the library, as ingestion would leave it."""
     clip = db.allocate_clip("B1", date(2026, 2, 3), source_name=f"GS{name_seed}.360")
-    archive = settings.archive_root / "2026-02-03" / f"{clip.name}.360"
+    archive = settings.archive_dir(clip.card_id, "2026-02-03") / f"{clip.name}.360"
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.write_bytes(b"o" * 2048)
     db.mark_ingested(clip.id, archive_path=archive, size=2048, checksum="x", duration=1.0)
     if rendered:
-        render = settings.render_root / "2026-02-03" / f"{clip.name}.mp4"
+        render = settings.render_dir(clip.card_id, "2026-02-03") / f"{clip.name}.mp4"
         render.parent.mkdir(parents=True, exist_ok=True)
         render.write_bytes(b"r" * 1024)
         db.mark_rendered(clip.id, render)

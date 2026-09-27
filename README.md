@@ -152,10 +152,14 @@ qui permet de retrouver le fichier en cours d'écriture.
 
 ## Organisation des fichiers
 
+Les captures se rangent par discipline, puis par engin, puis par jour. La
+discipline vient du préfixe de l'engin : `B` → `bob_raft`, `R` → `bob_race`,
+`S` → `speed_luge`.
+
 ```
 bibliothèque/
-  originaux/2026-02-03/B1_1.360      ← conservé, nécessaire pour re-rendre
-  equirect/2026-02-03/B1_1.mp4       ← le rendu
+  originaux/bob_raft/B1/2026-02-03/B1_1.360   ← conservé, nécessaire pour re-rendre
+  equirect/bob_raft/B1/2026-02-03/B1_1.mp4    ← le rendu
 ```
 
 ## Résolution de sortie
