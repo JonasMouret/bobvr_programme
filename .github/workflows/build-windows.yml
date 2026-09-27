@@ -103,13 +103,15 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ver = "$env:EXIFTOOL_VERSION"
           if (-not $ver) {
-            # Version courante, toujours servie à la racine du site ; les
-            # anciennes partent dans /older/ et une URL figée finit en 404.
+            # ver.txt (sur exiftool.org) donne la version courante.
             $ver = (Invoke-WebRequest -Uri "https://exiftool.org/ver.txt" -UseBasicParsing).Content.Trim()
           }
-          $url = "https://exiftool.org/exiftool-${ver}_64.zip"
+          # Le binaire Windows n'est plus servi par exiftool.org directement
+          # (l'URL du site renvoie 404) : la page de téléchargement pointe vers
+          # SourceForge, qui héberge le zip. On y va donc en direct.
+          $url = "https://downloads.sourceforge.net/project/exiftool/exiftool-${ver}_64.zip"
           Write-Host "Téléchargement d'exiftool $ver…"
-          Invoke-WebRequest -Uri $url -OutFile exiftool.zip
+          Invoke-WebRequest -Uri $url -OutFile exiftool.zip -MaximumRedirection 5
           Expand-Archive -Path exiftool.zip -DestinationPath exiftool-extract -Force
           # L'archive Windows livre « exiftool(-k).exe » ; BobVr attend « exiftool.exe ».
           $exe = Get-ChildItem -Path exiftool-extract -Recurse -Filter "exiftool*.exe" |
