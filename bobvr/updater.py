@@ -375,17 +375,20 @@ def apply_update(
     if spawn:
         import subprocess
 
-        # Détaché : le .bat doit survivre à la fermeture de BobVr, sinon il ne
-        # pourra jamais copier par-dessus lui.
-        flags = subprocess_kwargs()
-        creationflags = flags.get("creationflags", 0)
-        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        # Le .bat doit survivre à la fermeture de BobVr (il copie par-dessus lui)
+        # et tourner sans fenêtre visible. ``subprocess_kwargs`` fournit un
+        # ``startupinfo`` qui masque la console ; on l'ajoute à un groupe de
+        # processus détaché et à CREATE_NO_WINDOW pour ne rien afficher.
+        kwargs = subprocess_kwargs()
+        creationflags = kwargs.pop("creationflags", 0)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
         creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         subprocess.Popen(  # noqa: S603
             ["cmd", "/c", str(script_path)],
             creationflags=creationflags,
             close_fds=True,
             cwd=str(script_path.parent),
+            **kwargs,
         )
     return script_path
 

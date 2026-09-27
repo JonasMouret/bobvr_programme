@@ -741,6 +741,23 @@ class MainWindow(QMainWindow):
             "Import et conversion des vidéos GoPro MAX de la piste de bobsleigh.",
         )
 
+    def shutdown_for_update(self) -> None:
+        """Release resources just before the process ends for a self-update.
+
+        The update helper waits for this process to exit before swapping the
+        files, so this stops the timers and workers and closes the database
+        cleanly; the caller then ends the process outright.
+        """
+        for stop in (
+            lambda: self._card_timer.stop(),
+            self.orchestrator.stop,
+            self.db.close,
+        ):
+            try:
+                stop()
+            except Exception:                    # nothing here may block the exit
+                log.debug("arrêt pour mise à jour : une étape a échoué", exc_info=True)
+
     def closeEvent(self, event) -> None:
         if self.orchestrator.current_clip or self.orchestrator.current_card:
             answer = QMessageBox.question(

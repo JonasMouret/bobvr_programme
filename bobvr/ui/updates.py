@@ -14,6 +14,7 @@ signaux Qt, livrés sur le fil de la fenêtre, comme le reste de l'application
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QUrl, Signal
@@ -191,12 +192,21 @@ class UpdateDialog(QDialog):
         except Exception as exc:  # noqa: BLE001 - on remet l'UI en état
             self._on_failed(str(exc))
             return
-        # Le script de bascule attend précisément la fermeture de ce processus
-        # pour remplacer les fichiers verrouillés, puis relance BobVr.
+        # Le script de bascule attend maintenant que CE processus se ferme pour
+        # remplacer les fichiers verrouillés, puis relance BobVr. Un simple
+        # QApplication.quit() ne suffit pas ici : les fils de l'orchestrateur et
+        # la boucle modale du dialogue peuvent garder le processus en vie, et le
+        # script attend alors indéfiniment. On libère donc ce qui doit l'être,
+        # puis on met fin au processus sans détour.
         self.accept()
-        app = QApplication.instance()
-        if app is not None:
-            app.quit()
+        window = self.parent()
+        shutdown = getattr(window, "shutdown_for_update", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:  # noqa: BLE001 - on sort quoi qu'il arrive
+                log.debug("arrêt avant mise à jour incomplet", exc_info=True)
+        os._exit(0)
 
     def _on_failed(self, message: str) -> None:
         self.progress.setVisible(False)
