@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..media import MaxVideoInfo
-from .caps import Capabilities, find_tool, subprocess_kwargs
+from .caps import Capabilities, subprocess_kwargs
 from .geometry import (
     MAX_FOV,
     MIN_FOV,
@@ -538,42 +538,165 @@ def _progress_from(fields: dict[str, str], total: float) -> RenderProgress:
     )
 
 
+# -------------------------------------------------------- 360 metadata
+
+#: The Spherical Video V1 box identity and payload. Players (VLC, YouTube,
+#: GoPro Player) look for this exact uuid inside the video track and read the
+#: RDF/XML to switch into 360. Written here in pure Python rather than shelled
+#: out to exiftool: the tag is four fixed lines, and bundling exiftool (a whole
+#: Perl runtime) on Windows just to write them was never worth the weight.
+_SPHERICAL_UUID = bytes.fromhex("ffcc8263f8554a938814587a02521fdd")
+_SPHERICAL_XML = (
+    "<rdf:SphericalVideo\n"
+    " xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'\n"
+    " xmlns:GSpherical='http://ns.google.com/videos/1.0/spherical/'>\n"
+    "  <GSpherical:ProjectionType>equirectangular</GSpherical:ProjectionType>\n"
+    "  <GSpherical:Spherical>True</GSpherical:Spherical>\n"
+    "  <GSpherical:Stitched>True</GSpherical:Stitched>\n"
+    "  <GSpherical:StitchingSoftware>{software}</GSpherical:StitchingSoftware>\n"
+    "</rdf:SphericalVideo>"
+)
+
+#: MP4 boxes that hold other boxes; the rest are leaves whose bytes we copy.
+_MP4_CONTAINERS = frozenset(
+    {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts", b"udta"}
+)
+
+
+def _mp4_boxes(buf, start: int, end: int):
+    """Yield ``(offset, type, header_len, size)`` for each box in a range."""
+    p = start
+    while p + 8 <= end:
+        size = int.from_bytes(buf[p:p + 4], "big")
+        typ = bytes(buf[p + 4:p + 8])
+        header = 8
+        if size == 1:                       # 64-bit size follows the type
+            size = int.from_bytes(buf[p + 8:p + 16], "big")
+            header = 16
+        elif size == 0:                     # runs to the end of its parent
+            size = end - p
+        if size < header or p + size > end:
+            break
+        yield p, typ, header, size
+        p += size
+
+
+def _mp4_find(buf, start: int, end: int, path: tuple[bytes, ...]):
+    """Find the first box matching a nested ``path``; ``None`` if absent."""
+    want = path[0]
+    for offset, typ, header, size in _mp4_boxes(buf, start, end):
+        if typ == want:
+            if len(path) == 1:
+                return offset, header, size
+            if typ in _MP4_CONTAINERS:
+                found = _mp4_find(buf, offset + header, offset + size, path[1:])
+                if found:
+                    return found
+    return None
+
+
+def _mp4_traks(buf, moov_start: int, header: int, size: int):
+    for offset, typ, h, sz in _mp4_boxes(buf, moov_start + header, moov_start + size):
+        if typ == b"trak":
+            yield offset, h, sz
+
+
+def _mp4_handler(buf, trak_start: int, header: int, size: int) -> bytes | None:
+    """The four-letter handler of a track: ``b"vide"``, ``b"soun"``, …"""
+    found = _mp4_find(buf, trak_start + header, trak_start + size, (b"mdia", b"hdlr"))
+    if not found:
+        return None
+    hs, hh, _ = found
+    # hdlr payload: version+flags (4), pre_defined (4), handler_type (4).
+    return bytes(buf[hs + hh + 8:hs + hh + 12])
+
+
 def inject_spherical_metadata(path: Path, software: str = "BobVr") -> bool:
-    """Tag ``path`` as a stitched equirectangular 360 video.
+    """Tag ``path`` as a stitched equirectangular 360 video, in place.
 
-    Without this, players show the frame flat and finger-drag navigation never
-    appears. Returns False (with a warning) rather than raising, so a missing
-    exiftool costs the metadata but not the render.
+    Writes the Spherical Video V1 ``uuid`` box into the video track. Without
+    it, players show the frame flat and finger-drag navigation never appears.
+    Returns False (with a warning) rather than raising, so an MP4 we cannot
+    parse costs the metadata but not the render.
 
-    Note what is deliberately *not* written here: a field of view. No
-    spherical-video specification carries one -- exiftool's own tag list for
-    the group is proof enough -- and the GPano property that does exist lands
-    in a top-level XMP box that video players never read. The field of view is
-    settled in the projection instead; see ``NEUTRAL_FOV``.
+    When ``moov`` sits before ``mdat`` -- which it does here, because the render
+    muxes with ``+faststart`` -- growing ``moov`` pushes the media data down, so
+    every chunk offset in ``stco``/``co64`` is shifted to match. Get that wrong
+    and the file still lists as spherical but decodes to garbage.
+
+    Note what is deliberately *not* written: a field of view. No
+    spherical-video specification carries one, so it is settled in the
+    projection instead; see ``NEUTRAL_FOV``.
     """
-    exiftool = find_tool("exiftool")
-    if not exiftool:
-        log.warning(
-            "exiftool est introuvable : %s ne sera pas reconnu comme une vidéo "
-            "360 par les lecteurs. Installez-le (sous Ubuntu : sudo apt install "
-            "libimage-exiftool-perl ; sous Windows : exiftool.exe à côté de "
-            "BobVr.exe ou dans son dossier vendor).",
-            path.name,
-        )
+    try:
+        buf = bytearray(path.read_bytes())
+    except OSError as exc:
+        log.warning("360 : lecture de %s impossible (%s)", path.name, exc)
         return False
 
-    cmd = [
-        exiftool, "-api", "LargeFileSupport=1", "-overwrite_original",
-        "-XMP-GSpherical:Spherical=true",
-        "-XMP-GSpherical:Stitched=true",
-        f"-XMP-GSpherical:StitchingSoftware={software}",
-        "-XMP-GSpherical:ProjectionType=equirectangular",
-        str(path),
-    ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, **subprocess_kwargs()
-    )
-    if result.returncode != 0:
-        log.warning("exiftool a échoué sur %s : %s", path.name, result.stderr.strip())
+    moov = mdat = None
+    for offset, typ, header, size in _mp4_boxes(buf, 0, len(buf)):
+        if typ == b"moov":
+            moov = (offset, header, size)
+        elif typ == b"mdat":
+            mdat = offset
+    if moov is None:
+        log.warning("360 : pas de boîte moov dans %s", path.name)
+        return False
+    moov_start, moov_header, moov_size = moov
+
+    video = None
+    for ts, th, tz in _mp4_traks(buf, moov_start, moov_header, moov_size):
+        if _mp4_handler(buf, ts, th, tz) == b"vide":
+            video = (ts, th, tz)
+            break
+    if video is None:
+        log.warning("360 : pas de piste vidéo dans %s", path.name)
+        return False
+    vtrak_start, _, vtrak_size = video
+
+    # Already tagged (e.g. a re-run): leave it be rather than stack a second box.
+    if _SPHERICAL_UUID in buf[vtrak_start:vtrak_start + vtrak_size]:
+        return True
+
+    xml = _SPHERICAL_XML.format(software=software).encode("utf-8")
+    box = (8 + 16 + len(xml)).to_bytes(4, "big") + b"uuid" + _SPHERICAL_UUID + xml
+    added = len(box)
+    # Faststart puts moov first, so the media below it slides down by `added`.
+    shift = added if (mdat is not None and mdat > moov_start) else 0
+
+    moov_bytes = bytearray(buf[moov_start:moov_start + moov_size])
+    if shift:
+        for ts, th, tz in _mp4_traks(buf, moov_start, moov_header, moov_size):
+            for name, entry in ((b"stco", 4), (b"co64", 8)):
+                found = _mp4_find(
+                    buf, ts + th, ts + tz, (b"mdia", b"minf", b"stbl", name)
+                )
+                if not found:
+                    continue
+                cs, ch, _ = found
+                rel = cs - moov_start
+                count = int.from_bytes(moov_bytes[rel + ch + 4:rel + ch + 8], "big")
+                pos = rel + ch + 8
+                for _ in range(count):
+                    value = int.from_bytes(moov_bytes[pos:pos + entry], "big") + shift
+                    moov_bytes[pos:pos + entry] = value.to_bytes(entry, "big")
+                    pos += entry
+
+    # Insert the box as the last child of the video track, then grow the two
+    # container sizes that now enclose it.
+    rel_trak = vtrak_start - moov_start
+    insert_at = rel_trak + vtrak_size
+    moov_bytes[insert_at:insert_at] = box
+    new_trak = int.from_bytes(moov_bytes[rel_trak:rel_trak + 4], "big") + added
+    moov_bytes[rel_trak:rel_trak + 4] = new_trak.to_bytes(4, "big")
+    moov_bytes[0:4] = (moov_size + added).to_bytes(4, "big")
+
+    try:
+        path.write_bytes(
+            bytes(buf[:moov_start]) + bytes(moov_bytes) + bytes(buf[moov_start + moov_size:])
+        )
+    except OSError as exc:
+        log.warning("360 : écriture de %s impossible (%s)", path.name, exc)
         return False
     return True

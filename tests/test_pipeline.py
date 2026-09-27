@@ -16,7 +16,38 @@ from bobvr.render.pipeline import (
     RenderSettings,
     Renderer,
     _escape_filtergraph_path,
+    _SPHERICAL_UUID,
+    _mp4_find,
+    inject_spherical_metadata,
 )
+
+
+def _box(typ: bytes, payload: bytes) -> bytes:
+    return (8 + len(payload)).to_bytes(4, "big") + typ + payload
+
+
+def _minimal_mp4(*, faststart: bool, first_chunk: int = 1000) -> bytes:
+    """A hand-built MP4 with one video track and a single stco entry.
+
+    Enough for the spherical injector to parse: a video ``hdlr`` and an
+    ``stco`` whose one offset the fixup must move when moov grows.
+    """
+    hdlr = _box(b"hdlr", b"\x00" * 8 + b"vide")
+    stco = _box(b"stco", b"\x00\x00\x00\x00" + (1).to_bytes(4, "big")
+                + first_chunk.to_bytes(4, "big"))
+    mdia = _box(b"mdia", hdlr + _box(b"minf", _box(b"stbl", stco)))
+    moov = _box(b"moov", _box(b"trak", mdia))
+    ftyp = _box(b"ftyp", b"isom")
+    mdat = _box(b"mdat", b"\x00" * 32)
+    return ftyp + moov + mdat if faststart else ftyp + mdat + moov
+
+
+def _stco_offset(data: bytes) -> int:
+    moov = _mp4_find(data, 0, len(data), (b"moov",))
+    ms, mh, mz = moov
+    cs, ch, _ = _mp4_find(data, ms + mh, ms + mz,
+                          (b"trak", b"mdia", b"minf", b"stbl", b"stco"))
+    return int.from_bytes(data[cs + ch + 8:cs + ch + 12], "big")
 
 
 @pytest.fixture
@@ -47,6 +78,49 @@ def test_a_windows_kernel_path_survives_the_filtergraph():
 def test_a_posix_kernel_path_is_left_alone():
     assert _escape_filtergraph_path("/home/jonas/.cache/bobvr/k.cl") == \
         "/home/jonas/.cache/bobvr/k.cl"
+
+
+# ------------------------------------------------------- 360 metadata
+
+
+def test_spherical_tag_is_added_and_chunk_offsets_follow(tmp_path):
+    """With moov before mdat (faststart), the stco offset must shift by the box."""
+    f = tmp_path / "v.mp4"
+    f.write_bytes(_minimal_mp4(faststart=True, first_chunk=1000))
+    before = len(f.read_bytes())
+
+    assert inject_spherical_metadata(f, "BobVr") is True
+    data = f.read_bytes()
+    added = len(data) - before
+
+    assert _SPHERICAL_UUID in data
+    assert added > 0
+    # The single chunk moved down by exactly the inserted box's length.
+    assert _stco_offset(data) == 1000 + added
+
+
+def test_spherical_tag_without_faststart_leaves_offsets_alone(tmp_path):
+    """moov after mdat: the media does not move, so offsets must not change."""
+    f = tmp_path / "v.mp4"
+    f.write_bytes(_minimal_mp4(faststart=False, first_chunk=40))
+    assert inject_spherical_metadata(f, "BobVr") is True
+    assert _stco_offset(f.read_bytes()) == 40
+
+
+def test_spherical_tag_is_idempotent(tmp_path):
+    f = tmp_path / "v.mp4"
+    f.write_bytes(_minimal_mp4(faststart=True))
+    assert inject_spherical_metadata(f, "BobVr") is True
+    once = f.read_bytes()
+    assert inject_spherical_metadata(f, "BobVr") is True
+    assert f.read_bytes() == once  # second run is a no-op
+    assert f.read_bytes().count(_SPHERICAL_UUID) == 1
+
+
+def test_a_file_without_a_moov_is_a_soft_failure(tmp_path):
+    f = tmp_path / "bad.mp4"
+    f.write_bytes(_box(b"ftyp", b"isom") + _box(b"mdat", b"\x00" * 8))
+    assert inject_spherical_metadata(f, "BobVr") is False
 
 
 def test_the_neutral_field_of_view_leaves_the_graph_untouched(renderer):

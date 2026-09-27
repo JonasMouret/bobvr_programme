@@ -17,16 +17,18 @@ arrivent en roues précompilées.
 
 ## Les outils externes
 
-BobVr appelle trois programmes qu'il n'embarque pas lui-même. Déposez-les dans
+BobVr appelle deux programmes qu'il n'embarque pas lui-même. Déposez-les dans
 `installer\vendor\` **avant** de construire, et ils voyageront dans la build :
 
 ```
 installer\vendor\
     ffmpeg.exe
     ffprobe.exe
-    exiftool.exe
-    exiftool_files\        (le dossier livré avec exiftool.exe, entier)
 ```
+
+Les métadonnées 360 (ce qui fait qu'un lecteur ouvre la vidéo en sphère plutôt
+qu'à plat) sont écrites par BobVr lui-même, en Python : exiftool n'est plus
+nécessaire.
 
 ### ffmpeg / ffprobe
 
@@ -52,13 +54,6 @@ Vérifiez la build avant de la déposer, plutôt que de vous fier au nom :
 
 Les deux lignes doivent répondre. Une fois BobVr construit, `bobvr-cli.exe
 info` redit la même chose en français, avec ce qui manque.
-
-### exiftool
-
-[exiftool.org](https://exiftool.org/) → *Windows Executable*. L'archive
-contient `exiftool(-k).exe` : **renommez-le en `exiftool.exe`** et copiez le
-dossier `exiftool_files` à côté. Sans exiftool, les vidéos sortent sans leurs
-métadonnées 360 et s'ouvrent à plat, sans navigation au doigt.
 
 ### Le GPU
 
@@ -99,13 +94,13 @@ pyinstaller installer\bobvr.spec --noconfirm --clean
 dist\BobVr\
     BobVr.exe          ← l'interface, à double-cliquer
     bobvr-cli.exe      ← la ligne de commande (info, probe, render, label)
-    vendor\            ← ffmpeg, ffprobe, exiftool, s'ils ont été déposés
-    _internal\         ← Qt, Python, le kernel OpenCL
+    _internal\         ← Qt, Python, le kernel OpenCL, et vendor\ (ffmpeg, ffprobe)
 ```
 
 Environ 220 Mo, dont l'essentiel est Qt. Le dossier se déplace d'un bloc :
-`BobVr.exe` cherche ses outils dans `vendor\`, puis à côté de lui, puis sur le
-PATH — dans cet ordre.
+`BobVr.exe` cherche ses outils à côté de lui, dans `_internal\vendor\`, puis sur
+le PATH — dans cet ordre. (PyInstaller range les fichiers embarqués sous
+`_internal\` ; BobVr sait les y trouver.)
 
 ## Premier démarrage sur le poste de la piste
 

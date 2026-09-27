@@ -13,22 +13,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      exiftool_version:
-        description: "Version d'exiftool (vide = dernière du paquet Chocolatey)"
-        required: false
-        default: ""
 
 permissions:
   contents: write        # nécessaire pour publier la release
 
 env:
-  # Vide par défaut : Chocolatey installe la dernière version disponible. Le
-  # déclenchement manuel peut forcer une version précise (format Chocolatey,
-  # ex. 13.59.0).
-  EXIFTOOL_VERSION: ${{ github.event.inputs.exiftool_version }}
   # Build ffmpeg complète (OpenCL + NVENC). L'URL « latest » de BtbN est
   # stable ; c'est une des deux sources recommandées dans docs/windows.md.
+  # (Les métadonnées 360 sont écrites en Python pur, plus besoin d'exiftool.)
   FFMPEG_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 
 jobs:
@@ -90,46 +82,6 @@ jobs:
             throw "Cette build ffmpeg n'a pas h264_nvenc : l'encodage GPU serait indisponible."
           }
           Write-Host "ffmpeg : program_opencl et h264_nvenc présents."
-
-      # exiftool est optionnel : sans lui, les MP4 sortent sans métadonnées 360
-      # et s'ouvrent à plat. On ne bloque donc pas la release s'il manque, mais
-      # on le signale bruyamment.
-      #
-      # On passe par Chocolatey (préinstallé sur le runner) plutôt que par un
-      # téléchargement direct : le binaire officiel est sur SourceForge, qui
-      # renvoie 403 aux IP des datacenters (Azure/GitHub Actions). Le paquet
-      # Chocolatey, lui, embarque le zip dans le .nupkg — aucun accès réseau
-      # vers SourceForge à l'installation.
-      - name: Installer exiftool
-        id: exiftool
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = "Stop"
-          $chocoArgs = @("install", "exiftool", "-y", "--no-progress")
-          if ($env:EXIFTOOL_VERSION) { $chocoArgs += @("--version", $env:EXIFTOOL_VERSION) }
-          choco @chocoArgs
-          if ($LASTEXITCODE -ne 0) { throw "choco install exiftool a échoué." }
-
-          # Le vrai exécutable est sous lib\exiftool ; ce qui est dans \bin
-          # n'est qu'un shim Chocolatey, inutilisable une fois recopié ailleurs.
-          $root = Join-Path $env:ChocolateyInstall "lib\exiftool"
-          $exe = Get-ChildItem -Path $root -Recurse -Filter "exiftool.exe" -ErrorAction SilentlyContinue |
-                 Sort-Object { $_.FullName -match '64' } -Descending |
-                 Select-Object -First 1
-          if (-not $exe) { throw "exiftool.exe introuvable après l'installation." }
-          Copy-Item $exe.FullName installer\vendor\exiftool.exe -Force
-          # La distribution récente sépare l'exe de son dossier exiftool_files ;
-          # les versions plus anciennes sont un exe autonome (pas de dossier).
-          $files = Get-ChildItem -Path $exe.Directory -Recurse -Directory -Filter "exiftool_files" -ErrorAction SilentlyContinue |
-                   Select-Object -First 1
-          if ($files) { Copy-Item $files.FullName installer\vendor\exiftool_files -Recurse -Force }
-          Write-Host "exiftool embarqué ($($exe.FullName))."
-
-      - name: Avertir si exiftool manque
-        if: steps.exiftool.outcome == 'failure'
-        shell: pwsh
-        run: Write-Host "::warning::exiftool n'a pas pu être téléchargé ; la build sortira sans métadonnées 360."
 
       # --- build -----------------------------------------------------------
 

@@ -299,7 +299,7 @@ class Orchestrator:
             self.listeners.fire(
                 "notice", "warning",
                 f"{clip.name} : rendu terminé, mais les métadonnées 360 n'ont pas "
-                "pu être écrites (exiftool manquant). La vidéo s'ouvrira à plat.",
+                "pu être écrites. La vidéo s'ouvrira à plat.",
             )
         self.db.mark_rendered(clip_id, output)
         self.listeners.fire("render_finished", self.db.clip(clip_id))

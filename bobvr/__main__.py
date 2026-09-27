@@ -237,7 +237,7 @@ def command_render(args) -> int:
     if not inject_spherical_metadata(result):
         print(
             "attention : les métadonnées 360 n'ont pas pu être écrites ; "
-            "installez exiftool pour que les lecteurs proposent la navigation.",
+            "la vidéo s'ouvrira à plat, sans navigation au doigt.",
             file=sys.stderr,
         )
     print(f"terminé : {result}")
