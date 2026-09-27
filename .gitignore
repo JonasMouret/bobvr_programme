@@ -44,3 +44,6 @@ installer/vendor/*
 .idea/
 *.swp
 .DS_Store
+
+# Outillage local (assistants, indexeurs)
+.serena/
