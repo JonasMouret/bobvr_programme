@@ -39,6 +39,22 @@ log = logging.getLogger(__name__)
 ProgressCallback = Callable[["RenderProgress"], None]
 
 
+def _escape_filtergraph_path(path) -> str:
+    """Make a file path safe as a value inside an ffmpeg ``-filter_complex``.
+
+    Two things bite on Windows. A backslash is the filtergraph escape
+    character, so the path uses forward slashes instead (ffmpeg accepts them on
+    Windows). And the drive colon in ``C:/…`` is the option separator: it has
+    to survive *two* levels of unescaping -- the graph level and the
+    filter-arguments level -- so it is written ``\\:`` (two backslashes). With a
+    single backslash the graph level consumes it and the argument parser then
+    splits the value at the bare colon, so ``program_opencl`` only ever sees
+    ``C`` and reports "Unable to open program source file". Forward-slashed
+    POSIX paths carry no colon and pass through untouched.
+    """
+    return str(path).replace("\\", "/").replace(":", r"\\:")
+
+
 class RenderError(RuntimeError):
     """The render failed or was refused."""
 
@@ -294,9 +310,7 @@ class Renderer:
             )
         except TooManyFramesError as exc:
             raise RenderError(str(exc)) from exc
-        # Forward slashes keep the path valid inside a filter description on
-        # Windows, where a backslash would be read as an escape.
-        source = str(kernel).replace("\\", "/").replace(":", r"\:")
+        source = _escape_filtergraph_path(kernel)
         return (
             f"[0:{a}]format=yuv420p,hwupload[t0];"
             f"[0:{b}]format=yuv420p,hwupload[t1];"

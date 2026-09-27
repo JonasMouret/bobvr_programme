@@ -11,7 +11,12 @@ import pytest
 from pathlib import Path
 
 from bobvr.render.geometry import MAX_5_6K, MAX_STAB_FRAMES, NEUTRAL_FOV
-from bobvr.render.pipeline import RenderError, RenderSettings, Renderer
+from bobvr.render.pipeline import (
+    RenderError,
+    RenderSettings,
+    Renderer,
+    _escape_filtergraph_path,
+)
 
 
 @pytest.fixture
@@ -23,6 +28,25 @@ def renderer(caps, tmp_path):
 def test_an_impossible_field_of_view_is_refused(fov):
     with pytest.raises(RenderError, match="champ de vision"):
         RenderSettings(initial_fov=fov).validate()
+
+
+def test_a_windows_kernel_path_survives_the_filtergraph():
+    """The drive colon must reach ffmpeg escaped, or program_opencl reads "C".
+
+    On a frozen Windows build the kernel lives under ``C:\\Users\\…``; a bare
+    colon in a filter value is the option separator, so it needs two
+    backslashes (graph level + args level). Backslashes become forward slashes.
+    """
+    escaped = _escape_filtergraph_path(r"C:\Users\bob\AppData\kernels\k.cl")
+    assert escaped == r"C\\:/Users/bob/AppData/kernels/k.cl"
+    # No bare colon survives to split the option value.
+    assert ":" not in escaped.replace(r"\\:", "")
+    assert "\\" not in escaped.replace(r"\\:", "")
+
+
+def test_a_posix_kernel_path_is_left_alone():
+    assert _escape_filtergraph_path("/home/jonas/.cache/bobvr/k.cl") == \
+        "/home/jonas/.cache/bobvr/k.cl"
 
 
 def test_the_neutral_field_of_view_leaves_the_graph_untouched(renderer):
